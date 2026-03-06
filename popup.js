@@ -187,13 +187,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function setButtonRecordingState() {
         if (recordBtnText) recordBtnText.innerText = 'Stop Recording';
-        if (recordBtn) recordBtn.className = 'w-full bg-red-600 hover:bg-red-500 text-white py-3.5 rounded-xl font-extrabold text-sm shadow-[0_0_15px_rgba(220,38,38,0.5)] transition-all duration-300 flex items-center justify-center space-x-2 relative group mt-2';
+        if (recordBtn) recordBtn.className = 'w-full bg-red-600 hover:bg-red-500 text-white py-3.5 rounded-xl font-extrabold text-sm shadow-xl border border-red-500 transition-all duration-300 flex items-center justify-center space-x-2 relative group mt-2';
         if (recordingDot) recordingDot.classList.remove('hidden');
     }
 
     function resetButton() {
         if (recordBtnText) recordBtnText.innerText = 'Start Recording';
-        if (recordBtn) recordBtn.className = 'w-full bg-blue-600 hover:bg-blue-500 text-white py-3.5 rounded-xl font-extrabold text-sm shadow-[0_0_15px_rgba(37,99,235,0.4)] transition-all duration-300 flex items-center justify-center space-x-2 relative group mt-2';
+        if (recordBtn) recordBtn.className = 'w-full bg-blue-600 hover:bg-blue-500 text-white py-3.5 rounded-xl font-extrabold text-sm shadow-lg transition-all duration-300 flex items-center justify-center space-x-2 relative group mt-2 custom-glow';
         if (recordingDot) recordingDot.classList.add('hidden');
     }
 });
