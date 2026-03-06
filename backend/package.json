@@ -15,6 +15,7 @@
         "dotenv": "^16.4.7",
         "express": "^4.21.2",
         "openai": "^4.86.1",
+        "stripe": "^20.4.0",
         "ws": "^8.18.0"
     },
     "devDependencies": {

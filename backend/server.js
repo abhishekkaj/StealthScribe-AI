@@ -9,11 +9,13 @@ import path from 'path';
 import url from 'url';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
+import Stripe from 'stripe';
 
 dotenv.config();
 
 // Init Supabase Service Role (bypasses RLS strictly for server updates after JWT check)
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,7 +34,40 @@ if (!fs.existsSync(tempDir)) {
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Middleware
+// Stripe Webhook MUST use raw body parsing to verify signatures, so we place it BEFORE express.json()
+app.post('/webhook', express.raw({ type: 'application/json' }), async (request, response) => {
+    const sig = request.headers['stripe-signature'];
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    let event;
+    try {
+        event = stripe.webhooks.constructEvent(request.body, sig, endpointSecret);
+    } catch (err) {
+        console.error(`Webhook Error: ${err.message}`);
+        return response.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Handle checkout completion
+    if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        const userId = session.client_reference_id; // We pass this when generating the checkout url
+
+        if (userId) {
+            console.log(`Upgrading User ${userId} to Pro plan.`);
+            // Upgrade the user in Supabase
+            const { error } = await supabase
+                .from('users')
+                .update({ subscription_tier: 'pro' })
+                .eq('id', userId);
+
+            if (error) console.error("Error upgrading user in DB:", error);
+        }
+    }
+
+    response.send();
+});
+
+// Middleware for all other routes
 app.use(express.json());
 
 // Maintain transcript per connection (simplified for a single instance)
@@ -263,6 +298,45 @@ app.post('/api/summarize', async (req, res) => {
     } catch (error) {
         console.error("Gemini API Error:", error.message || error);
         res.status(500).json({ error: "Failed to generate summary.", details: error.message });
+    }
+});
+
+// Create Stripe Checkout Session
+app.post('/create-checkout-session', async (req, res) => {
+    const { user_id, email } = req.body;
+
+    if (!user_id || !email) {
+        return res.status(400).json({ error: "Missing user details." });
+    }
+
+    try {
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            customer_email: email,
+            client_reference_id: user_id, // Secures the session to the Supabase ID
+            line_items: [
+                {
+                    price_data: {
+                        currency: 'usd',
+                        product_data: {
+                            name: 'StealthScribe Pro Subscription',
+                            description: 'Unlimited Meeting Recordings and AI Summaries',
+                        },
+                        unit_amount: 1999, // $19.99/mo
+                        recurring: { interval: 'month' },
+                    },
+                    quantity: 1,
+                },
+            ],
+            mode: 'subscription',
+            success_url: 'https://github.com/abhishekkaj/StealthScribe-AI', // Redirect to instructions or landing page
+            cancel_url: 'https://github.com/abhishekkaj/StealthScribe-AI',
+        });
+
+        res.json({ url: session.url });
+    } catch (error) {
+        console.error("Stripe Checkout Error:", error);
+        res.status(500).json({ error: "Failed to create checkout session." });
     }
 });
 

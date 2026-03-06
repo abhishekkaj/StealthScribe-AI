@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const recordBtn = document.getElementById('record-btn');
     const recordBtnText = document.getElementById('record-btn-text');
     const recordingDot = document.getElementById('recording-dot');
+    const upgradeBtn = document.getElementById('upgrade-btn');
+    const upgradeBtnText = document.getElementById('upgrade-btn-text');
 
     // Auth Check on load
     await checkAuth();
@@ -95,6 +97,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     logoutBtn.addEventListener('click', async () => {
         await supabase.auth.signOut();
+    });
+
+    // Checkout Session Trigger
+    upgradeBtn.addEventListener('click', async () => {
+        const { sb_session } = await chrome.storage.local.get('sb_session');
+        if (!sb_session) return;
+
+        upgradeBtnText.innerText = "Loading checkout...";
+
+        try {
+            const response = await fetch('http://localhost:8080/create-checkout-session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: sb_session.user.id,
+                    email: sb_session.user.email
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.url) {
+                // Instantly open the secure Stripe checkout url safely inside the browser
+                chrome.tabs.create({ url: data.url });
+            } else {
+                upgradeBtnText.innerText = "Checkout failed";
+                setTimeout(() => { upgradeBtnText.innerText = "Upgrade to Pro"; }, 2000);
+            }
+        } catch (e) {
+            console.error("Checkout error", e);
+            upgradeBtnText.innerText = "Network error";
+            setTimeout(() => { upgradeBtnText.innerText = "Upgrade to Pro"; }, 2000);
+        }
     });
 
     // Visual helpers
