@@ -1,19 +1,21 @@
 {
-  "manifest_version": 3,
-  "name": "StealthScribe AI Audio Capture",
-  "version": "1.0",
-  "description": "Silently captures active tab audio during browser-based meetings without using a bot participant.",
-  "permissions": [
-    "tabCapture",
-    "activeTab",
-    "storage",
-    "offscreen"
-  ],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
-  "action": {
-    "default_title": "Start Audio Capture"
-  }
+    "manifest_version": 3,
+    "name": "StealthScribe AI Audio Capture",
+    "version": "1.0",
+    "description": "Silently captures active tab audio during browser-based meetings without using a bot participant.",
+    "permissions": [
+        "tabCapture",
+        "activeTab",
+        "storage",
+        "offscreen",
+        "identity"
+    ],
+    "background": {
+        "service_worker": "background.js",
+        "type": "module"
+    },
+    "action": {
+        "default_title": "Start Audio Capture",
+        "default_popup": "popup.html"
+    }
 }

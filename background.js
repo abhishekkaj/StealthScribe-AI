@@ -1,38 +1,69 @@
 // Keeps track of whether we are currently recording.
 let isRecording = false;
 
-chrome.action.onClicked.addListener(async (tab) => {
-  // If we're already recording, stop it natively.
-  if (isRecording) {
-    chrome.runtime.sendMessage({ action: 'stop_recording' });
-    isRecording = false;
-    chrome.action.setBadgeText({ tabId: tab.id, text: "" });
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'trigger_record_toggle') {
+    if (request.start) {
+      handleStartRecording();
+    } else {
+      handleStopRecording();
+    }
+  }
+});
+
+async function handleStartRecording() {
+  if (isRecording) return;
+
+  // Retrieve JWT from Chrome Storage securely
+  const { sb_session } = await chrome.storage.local.get('sb_session');
+  if (!sb_session || !sb_session.access_token) {
+    console.error("Missing valid JWT token. User must authenticate in popup.");
     return;
   }
+  const token = sb_session.access_token;
 
-  // STEP 1: Ensure an offscreen document is ready to receive the audio stream.
-  // Service Workers cannot access WebRTC APIs directly in MVP3, so an offscreen doc is needed.
-  await setupOffscreenDocument();
+  // Query the active tab to anchor the capture API
+  chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    if (tabs.length === 0) return;
+    const activeTab = tabs[0];
 
-  // STEP 2: Use chrome.tabCapture to grab a streamId for the active tab without bot participation.
-  chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (streamId) => {
-    if (chrome.runtime.lastError || !streamId) {
-      console.error("Failed to get tab Media Stream ID:", chrome.runtime.lastError?.message || "No stream ID");
-      return;
-    }
+    // Ensure an offscreen document is ready to receive the audio stream.
+    await setupOffscreenDocument();
 
-    // STEP 3: Route the streamId to the offscreen document.
-    // The offscreen doc will use this ID cleanly in getUserMedia.
-    chrome.runtime.sendMessage({
-      action: 'start_recording',
-      streamId: streamId
+    // Use chrome.tabCapture to grab a streamId for the active tab
+    chrome.tabCapture.getMediaStreamId({ targetTabId: activeTab.id }, (streamId) => {
+      if (chrome.runtime.lastError || !streamId) {
+        console.error("Failed to get tab Media Stream ID:", chrome.runtime.lastError?.message || "No stream ID");
+        return;
+      }
+
+      // Route the streamId and secure JWT token to the offscreen document
+      chrome.runtime.sendMessage({
+        action: 'start_recording',
+        streamId: streamId,
+        token: token
+      });
+
+      isRecording = true;
+      // Synchronize UI state across extension
+      chrome.storage.local.set({ isRecording: true });
+      chrome.action.setBadgeText({ tabId: activeTab.id, text: "REC" });
+      chrome.action.setBadgeBackgroundColor({ tabId: activeTab.id, color: "#FF0000" });
     });
-
-    isRecording = true;
-    chrome.action.setBadgeText({ tabId: tab.id, text: "REC" });
-    chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#FF0000" });
   });
-});
+}
+
+function handleStopRecording() {
+  if (!isRecording) return;
+  chrome.runtime.sendMessage({ action: 'stop_recording' });
+  isRecording = false;
+  chrome.storage.local.set({ isRecording: false });
+
+  // Clean up tab badges
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => chrome.action.setBadgeText({ tabId: tab.id, text: "" }));
+  });
+}
 
 async function setupOffscreenDocument() {
   const existingContexts = await chrome.runtime.getContexts({
