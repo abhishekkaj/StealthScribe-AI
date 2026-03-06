@@ -1,13 +1,41 @@
 let mediaRecorder;
 let recordedChunks = [];
+let ws; // WebSocket connection for real-time processing
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'start_recording') {
+        // Ideally pass a Supabase JWT token here from background script
+        const token = message.token || 'insert_jwt_token_here';
+        connectWebSocket(token);
         startRecording(message.streamId);
     } else if (message.action === 'stop_recording') {
         stopRecording();
     }
 });
+
+function connectWebSocket(token) {
+    ws = new WebSocket(`ws://localhost:8080/?token=${token}`);
+
+    ws.onclose = (event) => {
+        // Handle 4001 closure code securely defined from backend
+        if (event.code === 4001) {
+            console.log("Free time exhausted connection closure.");
+            stopRecording();
+
+            // Triggering native Chrome Notification immediately
+            chrome.notifications.create({
+                type: 'basic',
+                iconUrl: 'icon.png', // Replace with valid extension icon path
+                title: 'Time Limit Reached',
+                message: '1-hour free time pool exhausted. Notes are generating. Upgrade for unlimited time!'
+            });
+        }
+    };
+
+    ws.onerror = (error) => {
+        console.error("WebSocket error:", error);
+    };
+}
 
 async function startRecording(streamId) {
     try {
@@ -61,14 +89,12 @@ async function startRecording(streamId) {
 }
 
 async function handleAudioChunk(blob) {
-    // Convert blob chunk into array buffer or base64 to relay locally
-    // or prepare to blast off over an active WebSocket/API call directly here.
     console.log(`Intercepted chunk of size: ${blob.size} bytes. Ready to stream...`);
 
-    // Example implementation pattern for an API:
-    // const fd = new FormData();
-    // fd.append('audio_chunk', blob, 'chunk.webm');
-    // await fetch('wss://your-streaming-endpoint.abc', formData ... )
+    // Stream chunks live to backend through WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(blob);
+    }
 }
 
 function stopRecording() {
