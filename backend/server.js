@@ -9,13 +9,12 @@ import path from 'path';
 import url from 'url';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
-import Stripe from 'stripe';
+import crypto from 'crypto';
 
 dotenv.config();
 
 // Init Supabase Service Role (bypasses RLS strictly for server updates after JWT check)
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,27 +33,34 @@ if (!fs.existsSync(tempDir)) {
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Stripe Webhook MUST use raw body parsing to verify signatures, so we place it BEFORE express.json()
-app.post('/webhook', express.raw({ type: 'application/json' }), async (request, response) => {
-    const sig = request.headers['stripe-signature'];
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+// Lemon Squeezy Webhook MUST use raw body parsing to verify HMAC signatures securely
+app.post('/ls-webhook', express.raw({ type: 'application/json' }), async (request, response) => {
+    const secret = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
+    const hmac = crypto.createHmac('sha256', secret);
+    const digest = Buffer.from(hmac.update(request.body).digest('hex'), 'utf8');
+    const signature = Buffer.from(request.get('X-Signature') || '', 'utf8');
 
-    let event;
+    // Secure Verification Check against Lemon Squeezy Header
     try {
-        event = stripe.webhooks.constructEvent(request.body, sig, endpointSecret);
-    } catch (err) {
-        console.error(`Webhook Error: ${err.message}`);
-        return response.status(400).send(`Webhook Error: ${err.message}`);
+        if (!crypto.timingSafeEqual(digest, signature)) {
+            console.error("Invalid Lemon Squeezy Webhook Signature.");
+            return response.status(400).send("Invalid signature.");
+        }
+    } catch (e) {
+        return response.status(400).send("Signature validation error.");
     }
 
-    // Handle checkout completion
-    if (event.type === 'checkout.session.completed') {
-        const session = event.data.object;
-        const userId = session.client_reference_id; // We pass this when generating the checkout url
+    // Safely parse the verified body payload
+    const event = JSON.parse(request.body.toString());
+
+    // Handle checkout completion & subscription upgrades
+    if (event.meta.event_name === 'order_created' || event.meta.event_name === 'subscription_created') {
+        // Retrieve the custom Supabase userId injected during the frontend checkout session
+        const userId = event.meta.custom_data?.user_id;
 
         if (userId) {
-            console.log(`Upgrading User ${userId} to Pro plan.`);
-            // Upgrade the user in Supabase
+            console.log(`Upgrading Lemon Squeezy User ${userId} to Pro plan.`);
+            // Upgrade the user in Supabase securely using Service Role Privileges
             const { error } = await supabase
                 .from('users')
                 .update({ subscription_tier: 'pro' })
@@ -64,7 +70,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (request, 
         }
     }
 
-    response.send();
+    response.json({ received: true });
 });
 
 // Middleware for all other routes
@@ -301,8 +307,8 @@ app.post('/api/summarize', async (req, res) => {
     }
 });
 
-// Create Stripe Checkout Session
-app.post('/create-checkout-session', async (req, res) => {
+// Create Lemon Squeezy Checkout URL Endpoint
+app.post('/create-ls-checkout', async (req, res) => {
     const { user_id, email } = req.body;
 
     if (!user_id || !email) {
@@ -310,32 +316,56 @@ app.post('/create-checkout-session', async (req, res) => {
     }
 
     try {
-        const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            customer_email: email,
-            client_reference_id: user_id, // Secures the session to the Supabase ID
-            line_items: [
-                {
-                    price_data: {
-                        currency: 'usd',
-                        product_data: {
-                            name: 'StealthScribe Pro Subscription',
-                            description: 'Unlimited Meeting Recordings and AI Summaries',
-                        },
-                        unit_amount: 1999, // $19.99/mo
-                        recurring: { interval: 'month' },
+        const variantId = process.env.LEMON_SQUEEZY_VARIANT_ID;
+
+        // Call the Lemon Squeezy API directly via Fetch
+        const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/vnd.api+json',
+                'Content-Type': 'application/vnd.api+json',
+                'Authorization': `Bearer ${process.env.LEMON_SQUEEZY_API_KEY}`
+            },
+            body: JSON.stringify({
+                data: {
+                    type: "checkouts",
+                    attributes: {
+                        checkout_data: {
+                            email: email,
+                            // Extremely crucial custom payload injection for our Webhook verifying logic
+                            custom: {
+                                user_id: user_id
+                            }
+                        }
                     },
-                    quantity: 1,
-                },
-            ],
-            mode: 'subscription',
-            success_url: 'https://github.com/abhishekkaj/StealthScribe-AI', // Redirect to instructions or landing page
-            cancel_url: 'https://github.com/abhishekkaj/StealthScribe-AI',
+                    relationships: {
+                        store: {
+                            data: {
+                                type: "stores",
+                                id: "YOUR_STORE_ID" // Ideally this would also be an ENV var
+                            }
+                        },
+                        variant: {
+                            data: {
+                                type: "variants",
+                                id: variantId.toString()
+                            }
+                        }
+                    }
+                }
+            })
         });
 
-        res.json({ url: session.url });
+        const checkoutData = await response.json();
+
+        if (checkoutData.data && checkoutData.data.attributes.url) {
+            res.json({ url: checkoutData.data.attributes.url });
+        } else {
+            console.error("Lemon Squeezy Payload Error:", checkoutData);
+            res.status(500).json({ error: "Failed to generate checkout link." });
+        }
     } catch (error) {
-        console.error("Stripe Checkout Error:", error);
+        console.error("Lemon Squeezy Fetch Error:", error);
         res.status(500).json({ error: "Failed to create checkout session." });
     }
 });
