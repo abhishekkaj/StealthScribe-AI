@@ -42,14 +42,67 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 3. Login Flow via Google OAuth
     loginBtn.addEventListener('click', async () => {
-        const redirectUrl = chrome.identity ? chrome.identity.getRedirectURL() : window.location.origin;
+        // Critical: Guard against missing configurations
+        if (SUPABASE_URL === 'https://your-project.supabase.co' || SUPABASE_ANON_KEY === 'your-anon-key-here') {
+            alert("Development Setup Required: Please insert your actual SUPABASE_URL and SUPABASE_ANON_KEY at the very top of popup.js!");
+            return;
+        }
+
+        loginBtn.disabled = true;
+        const originalText = loginBtn.innerHTML;
+        loginBtn.innerHTML = '<span>Opening secure login...</span>';
+
+        const redirectUrl = chrome.identity.getRedirectURL(); // Auto-generates your extension's chromiumapp URL
+
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: {
-                redirectTo: redirectUrl
+                redirectTo: redirectUrl,
+                skipBrowserRedirect: true // In Chrome Extensions, we MUST skip native redirects!
             }
         });
-        if (error) console.error("Login Error:", error);
+
+        if (error) {
+            console.error("OAuth Provider Error:", error);
+            loginBtn.innerHTML = originalText;
+            loginBtn.disabled = false;
+            return;
+        }
+
+        if (data?.url) {
+            // Launch the native Chrome Identity popup for a secure OAuth flow
+            chrome.identity.launchWebAuthFlow({
+                url: data.url,
+                interactive: true
+            }, async (callbackUrl) => {
+                loginBtn.innerHTML = originalText;
+                loginBtn.disabled = false;
+
+                if (chrome.runtime.lastError) {
+                    console.error("Auth aborted or failed:", chrome.runtime.lastError);
+                    return;
+                }
+
+                if (callbackUrl) {
+                    // Extract Supabase JWT tokens from the returning redirect hash
+                    const url = new URL(callbackUrl);
+                    const hashParams = new URLSearchParams(url.hash.substring(1));
+                    const accessToken = hashParams.get('access_token');
+                    const refreshToken = hashParams.get('refresh_token');
+
+                    if (accessToken && refreshToken) {
+                        // Manually hydrate the Supabase Client session!
+                        const { error: sessionError } = await supabase.auth.setSession({
+                            access_token: accessToken,
+                            refresh_token: refreshToken
+                        });
+
+                        if (sessionError) console.error("Session Set Error:", sessionError);
+                        // Successful assignment triggers the global onAuthStateChange() listener above!
+                    }
+                }
+            });
+        }
     });
 
     // 4. Logout Session
