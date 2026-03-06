@@ -65,7 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             upgradeBtnText.innerText = "Loading checkout...";
             try {
-                const response = await fetch('http://localhost:8080/create-checkout-session', {
+                const response = await fetch('http://localhost:8080/create-ls-checkout', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
